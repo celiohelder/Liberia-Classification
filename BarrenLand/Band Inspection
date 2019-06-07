@@ -1,1 +1,249 @@
+            // ===================================================
+            //            BARREN LAND BAND INSPECTION PHASE
+            // ===================================================
 
+
+                    // ==========================
+                    // STEP 1 - LOAD THE DATASETS
+                    // ==========================
+ 
+// 1.1 Imported Landsat 8 Surface Reflectance (pre-Collection) - named [l8SR]
+
+                    // ===========================
+                    // STEP 2 - CLOUD-FREE MOSAICS
+                    // ===========================
+
+// 2.1 AUXILIARY FUNCTIONS
+// This section cover the auxiliary functions that is later mapped into the Landsat image collections
+
+// 2.1.1 Landsat 8 Surface Reflectance
+
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery. 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352)
+  .and((scored.select(['pixel_qa']).neq(368)))
+  .and((scored.select(['pixel_qa']).neq(416)))
+  .and((scored.select(['pixel_qa']).neq(432)))
+  .and((scored.select(['pixel_qa']).neq(480)))
+  .and((scored.select(['pixel_qa']).neq(864)))
+  .and((scored.select(['pixel_qa']).neq(880)))
+  .and((scored.select(['pixel_qa']).neq(928)))
+  .and((scored.select(['pixel_qa']).neq(944)))
+  .and((scored.select(['pixel_qa']).neq(992))));
+};
+
+// This function maps spectral indices for BuiltUp Areas Mapping using Landsat Imagery
+var addIndicesSR = function(img) {
+  // NDBI - Normalized Difference Built-up Index
+  var ndbi = img.normalizedDifference(['B6','B5']).rename('NDBI');
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDII - Normalized Difference Impervious Index
+  var ndii = img.normalizedDifference(['B3','B10']).rename('NDII');
+  // NDBaI - Normalized Difference Bareness Index
+  var ndbai = img.normalizedDifference(['B6','B10']).rename('NDBaI');
+  // SR (Simple Ratio)
+  var sr = img.select('B5').divide(img.select('B4')).rename('SR');
+  // BI - Baresoil Index
+  var bare = img.normalizedDifference(['B6','B7']).rename('BI');
+  // UI - Urban Index
+  var urbani = img.normalizedDifference(['B7','B5']).rename('UI');
+  // Band Ratio 54
+  var ratio54 = img.select('B6').divide(img.select('B5')).rename('R54');
+  //NDISI
+  var ndisi = img.expression('(TIR - ((VIS + NIR + SWIR)/3))/(TIR + ((VIS + NIR + SWIR)/3))',{
+    'VIS':img.select('B4'),
+    'NIR':img.select('B6'),
+    'SWIR':img.select('B3'),
+    'TIR':img.select('B10'),
+  }).rename('NDISI');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+   return img
+    .addBands(ndbi)
+    .addBands(ndvi)
+    .addBands(ndii)
+    .addBands(ndbai)
+    .addBands(bare)
+    .addBands(urbani)
+    .addBands(ratio54)
+    .addBands(ndisi)
+    .addBands(gcvi)
+    .addBands(sr);
+};
+
+
+// 2.2 MOSAIC PREPARATION
+// 2.2.1 Visualization parameter objects for mosaic displaying
+
+var visParSR = {bands:['B7','B6','B4'], min: 450, max: 2800}; // Real color composite for SR imagery
+
+// 2.2.2 Mosaic
+// 2.2.2.1 Filter Landsat collections by period of interest and map the quality bands into the collection.
+// Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
+// Additionally, this will avoid including some seasonal variatiation of the other months into the composite.
+
+var l8SRdry2013 = l8SR.filterDate('2013-12-01', '2014-03-01'); // Dry Season 2013
+var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
+var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
+var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
+var collectionSR = ee.ImageCollection(l8SRdry2013.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+    .map(maskCloudsSR)
+    .map(addIndicesSR)
+    
+var medianCompositeSR = collectionSR.median().clip(liberia);
+                    // ========================
+                    // STEP 3 - BAND HISTOGRAMS
+                    // ========================
+
+//3.1 Select the bands and indices for the histograms
+var bands = ['B2','B3','B4','B5','B6','B7']; // Did not include the Ultra-blue band
+var indices = ['NDBI','NDVI','NDII','NDBaI','BI','UI','R54','NDISI', 'GCVI','SR'];
+
+var compositeI = medianCompositeSR.select(bands);
+var compositeII = medianCompositeSR.select(indices);
+
+//3.2 Pre-define some customization options.
+//3.2.1 Spectral Bands
+var options = {
+  title: 'Landsat 8 DN histogram, bands 2-7',
+  fontSize: 20,
+  hAxis: {title: 'DN'},
+  vAxis: {title: 'count of DN'},
+  series: {
+    0: {color: 'blue'},
+    1: {color: 'green'},
+    2: {color: 'red'},
+    3: {color: 'magenta'},
+    4: {color: 'purple'},
+    5: {color: 'maroon'}}
+};
+
+//3.2.2 Spectral Indices
+var optionsII = {
+  title: 'Landsat 8 DN histogram, Spectral Indices',
+  fontSize: 20,
+  hAxis: {title: 'Index Reflectance'},
+  vAxis: {title: 'count of DN'},
+  series: {
+    0: {color: 'blue'},
+    1: {color: 'green'},
+    2: {color: 'red'},
+    3: {color: 'magenta'},
+    4: {color: 'purple'},
+    5: {color: 'cyan'},
+    6: {color: 'black'},
+    7: {color: 'brown'},
+    8: {color: 'orange'}}
+};
+// 3.3 Make the histogram, set the options.
+var histogramBands = ui.Chart.image.histogram (compositeI, BarrenLand,  30)
+    .setSeriesNames(['B2','B3','B4','B5','B6','B7'])
+    .setOptions(options);
+
+var histogramIndices = ui.Chart.image.histogram (compositeII, BarrenLand,  30)
+    .setSeriesNames(['NDBI','NDVI','NDII','NDBaI','BI','UI','R54','NDISI', 'GCVI','SR'])
+    .setOptions(optionsII);
+
+// Display the histogram.
+print(histogramBands);
+print(histogramIndices);
+Map.addLayer(medianCompositeSR, {bands:['B5','B4','B3'], min: 150, max: 3800}, 'Composite',false);
+
+
+                    // ====================
+                    // STEP 4 - BAND SERIES
+                    // ====================
+
+var points = LowBiomass.merge(BarrenLand.merge(Beaches));
+
+// 4.1 Spectral Bands
+// 4.1.1 Define customization options.
+var options = {
+  title: 'Landsat 8 SR Spectra for Urban Areas and Others - Spectral Bands',
+  hAxis: {title: 'Bands'},
+  vAxis: {title: 'DN'},
+  lineWidth: 1,
+  pointSize: 4,
+  series: {
+    0: {color: 'cyan'}, // Urban
+    1: {color: 'purple'}, // Bare
+    2: {color: 'green'}, // Vegetation
+    3: {color: 'red'}, // Grass
+}};
+
+// 4.1.2 Create the chart and set options.
+var spectraChart = ui.Chart.image.regions(
+    medianCompositeSR.select(['B1','B2','B3','B4','B5','B6','B7']), points, ee.Reducer.mean(), 30, 'label')
+        .setChartType('LineChart')
+        .setOptions(options);
+        
+// 4.2 Spectral Indices
+// 4.1.1 Define customization options.
+var optionsII = {
+  title: 'Landsat 8 SR Spectra for Urban Areas and Others - Spectral Indices',
+  hAxis: {title: 'Indices'},
+  vAxis: {title: 'Reflectance'},
+  lineWidth: 1,
+  pointSize: 4,
+  series: {
+    0: {color: 'cyan'}, // Urban
+    1: {color: 'purple'}, // Bare
+    2: {color: 'green'}, // Vegetation
+    3: {color: 'red'}, // Grass
+}};
+
+// 4.1.2 Create the chart and set options.
+var spectraChartII = ui.Chart.image.regions(
+    medianCompositeSR.select(indices), points, ee.Reducer.mean(), 30, 'label')
+        .setChartType('LineChart')
+        .setOptions(optionsII);
+
+// Display the chart.
+print(spectraChart);
+print(spectraChartII);
+
+// Add Indices to the Map
+var ndbi = medianCompositeSR.select('NDBI');
+Map.addLayer(ndbi, {palette:['fffeea','9a8e15','120d4d'], min:-0.4, max:0.15}, 'NDBI',false);
+
+var ndii = medianCompositeSR.select('NDII');
+Map.addLayer(ndii, {palette:['fffeea','9a8e15','120d4d'], min:-0.8, max:-0.4}, 'NDII',false);
+
+var ndbai = medianCompositeSR.select('NDBaI');
+Map.addLayer(ndbai, {palette:['fffeea','9a8e15','120d4d'], min:-0.9, max:0},'NDBaI',false);
+
+var bare = medianCompositeSR.select('BI');
+Map.addLayer(bare, {palette:['fffeea','9a8e15','120d4d'], min:0, max:0.4},'BI',false);
+
+var ndisi = medianCompositeSR.select('NDISI');
+Map.addLayer(ndisi, {palette:['fffeea','9a8e15','120d4d'], min:0.2, max:0.85},'NDISI',false);
+
+var urbaniz = medianCompositeSR.select('UI');
+Map.addLayer(urbaniz, {palette:['fffeea','9a8e15','120d4d'], min:-0.6, max:0.1}, 'UI');
+
+Map.setCenter(-10.7728, 6.2945, 12);
+
+Map.addLayer(pop, {}, 'Populated Settelments',false);
+
+// ----------------------------------
+var ndviMask = medianCompositeSR.select('NDVI').lt(0.45);
+var bandMask = medianCompositeSR.select('B6').gt(2300);
+var liberiaSRMasked = medianCompositeSR.updateMask(ndviMask);
+Map.addLayer (liberiaSRMasked, visParSR, 'Masked');
+
+
+
+var bufferPoly = function(feature) {
+  return feature.buffer(1000);   
+};
+
+
+
+var compositeMasked = medianCompositeSR.clip(popset);
+Map.addLayer(compositeMasked, visParSR, 'Composite');
