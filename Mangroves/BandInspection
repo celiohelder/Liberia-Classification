@@ -1,0 +1,193 @@
+            // ===================================================
+            //            MANGROVES BAND INSPECTION PHASE
+            // ===================================================
+
+
+                    // ==========================
+                    // STEP 1 - LOAD THE DATASETS
+                    // ==========================
+ 
+// 1.1 Imported Landsat 8 Surface Reflectance (pre-Collection) - named [l8SR]
+// 1.2 Imported the SRTM Digital Elevation Data 30 m - named [srtm]
+// 1.3 Imported the Large Scale International Boundary Polygon table - named [countries]
+
+                    // ===========================
+                    // STEP 2 - CLOUD-FREE MOSAICS
+                    // ===========================
+
+// 2.1 AUXILIARY FUNCTIONS
+// This section cover the auxiliary functions that is later mapped into the Landsat image collections
+
+// 2.1.1 Landsat 8 Surface Reflectance
+
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery. 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352)
+  .and((scored.select(['pixel_qa']).neq(368)))
+  .and((scored.select(['pixel_qa']).neq(416)))
+  .and((scored.select(['pixel_qa']).neq(432)))
+  .and((scored.select(['pixel_qa']).neq(480)))
+  .and((scored.select(['pixel_qa']).neq(864)))
+  .and((scored.select(['pixel_qa']).neq(880)))
+  .and((scored.select(['pixel_qa']).neq(928)))
+  .and((scored.select(['pixel_qa']).neq(944)))
+  .and((scored.select(['pixel_qa']).neq(992))));
+};
+
+// This function will add the slope based on SRTM. Water bodies will show very low slope.
+var addSlope = function(img){
+  var slope = ee.Terrain.slope(srtm);
+  return img.addBands(slope);
+};
+
+// This function maps spectral indices for Mangrove Mapping using Landsat Imagery
+var addIndicesSR = function(img) {
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDMI (Normalized Difference Mangrove Index - Shi et al 2016 - New spectral metrics for mangrove forest identification)
+  var ndmi = img.normalizedDifference(['B7','B3']).rename('NDMI');
+  // MNDWI (Modified Normalized Difference Water Index - Hanqiu Xu, 2006)
+  var mndwi = img.normalizedDifference(['B3','B6']).rename('MNDWI');
+  // SR (Simple Ratio)
+  var sr = img.select('B5').divide(img.select('B4')).rename('SR');
+  // Band Ratio 54
+  var ratio54 = img.select('B6').divide(img.select('B5')).rename('R54');
+  // Band Ratio 35
+  var ratio35 = img.select('B4').divide(img.select('B6')).rename('R35');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+   return img
+    .addBands(ndvi)
+    .addBands(ndmi)
+    .addBands(mndwi)
+    .addBands(sr)
+    .addBands(ratio54)
+    .addBands(ratio35)
+    .addBands(gcvi);
+};
+
+// 2.2 MOSAIC PREPARATION
+// 2.2.1 Visualization parameter objects for mosaic displaying
+
+var visParSR = {bands:['B5','B4','B3'], min: 450, max: 2800}; // Real color composite for SR imagery
+
+// 2.2.2 Mosaic
+// 2.2.2.1 Filter Landsat collections by period of interest and map the quality bands into the collection.
+// Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
+// Additionally, this will avoid including some seasonal variatiation of the other months into the composite.
+
+var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
+var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
+var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
+var collectionSR = ee.ImageCollection(l8SRdry2013.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+    .map(maskCloudsSR)
+    .map(addIndicesSR)
+    .map(addSlope);
+    
+var medianCompositeSR = collectionSR.median();
+                    // ========================
+                    // STEP 3 - BAND HISTOGRAMS
+                    // ========================
+
+//3.1 Select the bands and indices for the histograms
+var bands = ['B2','B3','B4','B5','B6','B7']; // Did not include the Ultra-blue band
+var indices = ['NDVI','MNDWI','R35','SR','GCVI'];
+
+var compositeI = medianCompositeSR.select(bands);
+var compositeII = medianCompositeSR.select(indices);
+
+//3.2 Pre-define some customization options.
+//3.2.1 Spectral Bands
+var options = {
+  title: 'Landsat 8 DN histogram, bands 2-7',
+  fontSize: 20,
+  hAxis: {title: 'DN'},
+  vAxis: {title: 'count of DN'},
+  series: {
+    0: {color: 'blue'},
+    1: {color: 'green'},
+    2: {color: 'red'},
+    3: {color: 'magenta'},
+    4: {color: 'purple'},
+    5: {color: 'maroon'}}
+};
+
+//3.2.2 Spectral Indices
+var optionsII = {
+  title: 'Landsat 8 DN histogram, Spectral Indices',
+  fontSize: 20,
+  hAxis: {title: 'Index Reflectance'},
+  vAxis: {title: 'count of DN'},
+  series: {
+    0: {color: 'blue'},
+    1: {color: 'green'},
+    2: {color: 'red'},
+    3: {color: 'magenta'}}
+};
+// 3.3 Make the histogram, set the options.
+var histogramBands = ui.Chart.image.histogram (compositeI, mangrove,  30)
+    .setSeriesNames(['B2','B3','B4','B5','B6','B7'])
+    .setOptions(options);
+
+var histogramIndices = ui.Chart.image.histogram (compositeII, mangrove,  30)
+    .setSeriesNames(['NDVI','MNDWI','R35','SR','GCVI'])
+    .setOptions(optionsII);
+
+// Display the histogram.
+print(histogramBands);
+print(histogramIndices);
+Map.addLayer(medianCompositeSR, {bands:['B5','B4','B3'], min: 150, max: 3800}, 'Composite');
+
+
+                    // ====================
+                    // STEP 4 - BAND SERIES
+                    // ====================
+
+var points = mangrove.merge(Other);
+
+// 4.1 Spectral Bands
+// 4.1.1 Define customization options.
+var options = {
+  title: 'Landsat 8 SR Spectra for Water and Others - Spectral Bands',
+  hAxis: {title: 'Bands'},
+  vAxis: {title: 'DN'},
+  lineWidth: 1,
+  pointSize: 4,
+  series: {
+    0: {color: 'blue'}, // Water
+    1: {color: 'orange'}, // Other
+}};
+
+// 4.1.2 Create the chart and set options.
+var spectraChart = ui.Chart.image.regions(
+    medianCompositeSR.select(['B1','B2','B3','B4','B5','B6','B7']), points, ee.Reducer.mean(), 30, 'label')
+        .setChartType('LineChart')
+        .setOptions(options);
+        
+// 4.2 Spectral Indices
+// 4.1.1 Define customization options.
+var optionsII = {
+  title: 'Landsat 8 SR Spectra for Mangroves and Others - Spectral Indices',
+  hAxis: {title: 'Indices'},
+  vAxis: {title: 'Reflectance'},
+  lineWidth: 1,
+  pointSize: 4,
+  series: {
+    0: {color: 'cyan'}, // Water
+    1: {color: 'purple'}, // Other
+}};
+
+// 4.1.2 Create the chart and set options.
+var spectraChartII = ui.Chart.image.regions(
+    medianCompositeSR.select(['NDVI','MNDWI','R35','SR','GCVI']), points, ee.Reducer.mean(), 30, 'label')
+        .setChartType('LineChart')
+        .setOptions(optionsII);
+
+// Display the chart.
+print(spectraChart);
+print(spectraChartII);
