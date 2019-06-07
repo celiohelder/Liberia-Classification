@@ -1,0 +1,94 @@
+//=====================================================================================================================
+//                                                NASA - CI PARTNERSHIP
+// Remote Sensing of Land Cover and Ecosystems: Country-level Ecosystem Extent and Change Mapping in Sub-Saharan Africa
+//                                                  
+//                                                    Celio Sousa
+//                                    NASA GSFC Biospheric Sciences Laboratory 618
+//=====================================================================================================================
+
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//                            |       MOSAIACKING: CLOUD-FREE MOSAIC FOR LIBERIA       |
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Script Objective(s):
+// a) Use the cloud-free functions (see Script #1) to enhance the final cloud free mosaiac;
+// b) Produce a cloud-free mosaic using MEDIAN and Greenest Pixel (Max NDVI)
+
+// ____________________________________________________________________________________________________________________
+
+
+//                                          **********************************
+//                                          STEP 1 - LOAD THE IMAGE COLLECTION
+//                                          **********************************
+// Temporal Parameters
+
+var year = 2016; // Select the desired central year here
+var startDate = (year-1)+'-01-01'; // Start date will be set one year before the central year
+var endDate = (year+1)+'-12-31'; // End date will be set to one year later than the central year. 
+
+// Spatial Parameters
+
+var countries = ee.FeatureCollection("USDOS/LSIB/2013"); // Load a table with country borders
+var liberia = countries.filterMetadata('name' , 'equals', 'LIBERIA'); // select LIBERIA from that table -- Type the name of any country in CAPITAL letter
+
+// Load and refine the image collection
+
+var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') 
+    .filterDate(startDate, endDate) // Filter by the dates defined in #1
+    .map (function maskL8sr(image) { // Mask clouds and cloud shadows based on the second function of Script #1
+  // Bits 3 and 5 are cloud shadow and cloud, respectively.
+  var cloudShadowBitMask = ee.Number(2).pow(3).int();
+  var cloudsBitMask = ee.Number(2).pow(5).int();
+  // Get the pixel QA band.
+  var qa = image.select('pixel_qa');
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+      .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  // Return the masked image, scaled to [0, 1].
+  return image.updateMask(mask).divide(10000).copyProperties(image, ["system:time_start"]);
+});
+
+
+//                                          ***************************
+//                                          STEP 2 - CLOUD-FREE MOSAICS
+//                                          ***************************
+
+// 1. MEDIAN
+// A composite can be created by extracting the median pixel value from the stack of scenes in the time interval
+
+var composite = collection.median(); // Use median pixel
+var compositeLiberia = composite.clip(geometry); // Clip the cloud free mosaic using the Liberia Border
+
+// 1. GREENEST PIXEL
+// A composite can be created by extracting the pixel with the maximum NDVI value 
+
+// First, create a function with the spectral index to be mapped into the collection
+var addNDVI = function (x){
+  var ndvi = x.normalizedDifference(['B5', 'B4']).rename("NDVI");
+  return x.addBands(ndvi)
+};
+
+// Map the function into the collection
+var collectionWithNDVI = collection.map(addNDVI);
+var compositeII = collectionWithNDVI.qualityMosaic('NDVI'); // Select the NDVI band that was just added to the scene as the quality band
+                                                            // to be used as a in the compositing
+var compositeLiberiaII = compositeII.clip(geometry) // Clip the cloud free mosaic using the Liberia Border
+
+
+//                                          **********************
+//                                          STEP 3 - VIZUALIZATION
+//                                          **********************
+
+Map.setCenter(-10.2572, 6.10761, 8); //  Map centered in Monrovia, Liberia with a zoom of 8
+var visParSR = {bands:['B5','B4','B3'], min: 0, max: 0.5} // Set a visualization parameter for the composites with a false color
+
+Map.addLayer(compositeLiberia, visParSR, 'Median');
+Map.addLayer(compositeLiberiaII, visParSR, 'Greennest Pixel');
+
+Export.image.toDrive({
+  image: compositeLiberia,
+  description: 'CloudFree',
+  scale: 30,
+  region: geometry,
+  maxPixels:1e13
+});
