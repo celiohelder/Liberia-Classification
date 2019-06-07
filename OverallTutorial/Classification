@@ -1,0 +1,175 @@
+//=====================================================================================================================
+//                                                NASA - CI PARTNERSHIP
+// Remote Sensing of Land Cover and Ecosystems: Country-level Ecosystem Extent and Change Mapping in Sub-Saharan Africa
+//                                                  
+//                                                    Celio Sousa
+//                                    NASA GSFC Biospheric Sciences Laboratory 618
+//=====================================================================================================================
+
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//                            |    CLASSIFICATION: RANDOM FOREST AND DECISION TREES    |
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Script Objective(s):
+// a) Classify a cloud-free mosaic of Landsat 8 scenes using Random Forest and DT classifiers
+
+// ____________________________________________________________________________________________________________________
+
+
+//                                          ****************************
+//                                          STEP 1 - AUXILIARY FUNCTIONS
+//                                          ****************************
+
+// 1.1 Cloud and Cloud Shadow Masking
+function cloudmaskL8(image) {
+  // Bits 3 and 5 are cloud shadow and cloud, respectively.
+  var cloudShadowBitMask = ee.Number(2).pow(3).int();
+  var cloudsBitMask = ee.Number(2).pow(5).int();
+  // Get the pixel QA band.
+  var qa = image.select('pixel_qa');
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+      .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  // Return the masked image, scaled to [0, 1].
+  return image.updateMask(mask).divide(10000).copyProperties(image, ["system:time_start"]);
+}
+
+// 1.2 Spectral Indices
+// For a Random Forest and Decision Tree type classifiers, predictors must be used. Usually different spectral indices are 
+// good predictors. The function below maps several spectral indices into the Landsat Collection
+
+var addIndicesL8 = function(img) {
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDMI (Normalized Difference Mangrove Index - Shi et al 2016 - New spectral metrics for mangrove forest identification)
+  var ndmi = img.normalizedDifference(['B7','B3']).rename('NDMI');
+  // MNDWI (Modified Normalized Difference Water Index - Hanqiu Xu, 2006)
+  var mndwi = img.normalizedDifference(['B3','B6']).rename('MNDWI');
+  // SR (Simple Ratio)
+  var sr = img.select('B5').divide(img.select('B4')).rename('SR');
+  // Band Ratio 54
+  var ratio54 = img.select('B6').divide(img.select('B5')).rename('R54');
+  // Band Ratio 35
+  var ratio35 = img.select('B4').divide(img.select('B6')).rename('R35');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+   return img
+    .addBands(ndvi)
+    .addBands(ndmi)
+    .addBands(mndwi)
+    .addBands(sr)
+    .addBands(ratio54)
+    .addBands(ratio35)
+    .addBands(gcvi);
+};
+
+//                                          **********************************
+//                                          STEP 2 - LOAD THE IMAGE COLLECTION
+//                                          **********************************
+// 2.1 Temporal Parameters
+
+var year = 2015; // Select the desired central year here
+var startDate = (year-1)+'-01-01'; // Start date will be set one year before the central year
+var endDate = (year+1)+'-12-31'; // End date will be set to one year later than the central year. 
+
+// 2.2 Spatial Parameters
+
+var countries = ee.FeatureCollection("USDOS/LSIB/2013"); // Load a table with country borders
+var liberia = countries.filterMetadata('name' , 'equals', 'LIBERIA'); // select LIBERIA from that table -- Type the name of any country in CAPITAL letter
+
+// 2.3 Image Collection
+var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') 
+    .filterDate(startDate, endDate) // Filter by the dates defined above
+    .map(cloudmaskL8) // Here we map the cloud mask function established on previous sections
+    .map(addIndicesL8); // This will add all the indices at each image of the collection
+
+//                                          ***************************
+//                                          STEP 3 - CLOUD-FREE MOSAICS
+//                                          ***************************
+
+// For this exercise, MEDIAN composite was used. Remember: There are several other ways to composite. Please refer to 
+// literature and GEE Guides for more information
+
+var composite = collection.median(); // Use median pixel
+var compositeLiberia = composite.clip(liberia); // Clip the cloud free mosaic using the Liberia Border
+
+
+
+//                                          ***********************
+//                                          STEP 4 - CLASSIFICATION
+//                                          ***********************
+
+// 4.1 Sample Selection
+
+// Draw polygons by hand by clicking the 'Draw a Shape' icon in the geometry drawing tools
+// a) Click '+new layer' to make sets of polygons, each set representing samples from a classes.
+// b) For each set of polygons, in the Geometry Imports, name them accordingly and click the gear icon 
+// and 'Import as' FeatureCollection. Also add a property called 'landcover' and set a consecutive integer 
+// starting from 0 for the first class and so on.
+
+// After sample selection, merge them together into a new variable, using their names, following the example below:
+var samples = Class1.merge(Class2).merge(Class3).merge(Class4)
+
+// 4.2 Classification
+// 4.2.1 Samples preparation
+
+// Select the bands for prediction
+var bands = ['B5','B6','B7', 'NDVI','MNDWI','SR','R35','GCVI']; // Select the bands you desire to use in the classifier
+
+// Make training data by 'overlaying' the points on the image
+var trainingTesting = compositeLiberia.select(bands).sampleRegions({ // selecting the bands from the cloud free mosaic
+  collection: samples,
+  properties: ['landcover'],
+  scale: 30
+}).randomColumn('random'); // creates a column with random numbers 
+
+// Partition the training
+var training = trainingTesting.filter(ee.Filter.lte('random', 0.6)); // Randomly select 60% of the samples for training the classifier
+print('Training n =', training.aggregate_count('.all'));
+
+var testing = trainingTesting.filter(ee.Filter.gt('random', 0.6)); // Randomly selects 40% of the samples for testing the classifier
+print('Testing n =', testing.aggregate_count('.all'));
+
+//***************************
+// 4.2.2 CART classification
+// Get a CART classifier and train it.
+var classifier = ee.Classifier.cart().train({
+  features: training.select(['B10', 'B11', 'B7', 'B6', 'B5', 'B4', 'B3', 'B2', 'NDVI','NDWI', 'landcover']), // Here you select the bands 
+                                                                                                             // for prediction + the property that identify each class for each sample 'landcover'
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+var validation = testing.classify(classifier);
+var testAccuracy = validation.errorMatrix('landcover', 'classification');
+print('Validation error matrix CART: ', testAccuracy);
+print('Validation overall accuracy CART: ', testAccuracy.accuracy());
+
+// Classify the image with CART.
+var classifiedcart = compositeLiberia.select(bands).classify(classifier);
+
+//***************************
+// 4.2.3  RandomForest classification
+// Get a RandomForest classifier and train it.
+var classifier = ee.Classifier.randomForest(10,5).train({
+  features: training.select(['B10', 'B11', 'B7', 'B6', 'B5', 'B4', 'B3', 'B2', 'NDVI','NDWI', 'landcover']), // Same thing for CART
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+var validation = testing.classify(classifier);
+var testAccuracy = validation.errorMatrix('landcover', 'classification');
+print('Validation error matrix RandomForest: ', testAccuracy);
+print('Validation overall accuracy RandomForest: ', testAccuracy.accuracy());
+
+// Classify the image with RandomForest.
+var classifiedrf = liberiaMedian.select(bands).classify(classifier);
+
+//                                          **************************
+//                                          STEP 5 - ADDING TO THE MAP
+//                                          **************************
+
+// For visualization, add the classifications (classifiedcart and/or classifiedrf) using
+// a min = 0 and max = the number of the last class; and a palette of colors for your classes. The orders of the colors will follow the number of the classes
+// Example: Map.addLayer(classifiedrf, {min: 0, max: 5, palette: ['3498db', '33425b','00782a', 'ffd300','8439c5','e34a06']}, 'RF');
