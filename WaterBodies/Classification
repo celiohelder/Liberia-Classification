@@ -1,0 +1,233 @@
+            // =================================================
+            //            WATER BODIES CLASSIFICATION
+            // =================================================
+
+
+                    // ==========================
+                    // STEP 1 - LOAD THE DATASETS
+                    // ==========================
+ 
+// 1.1 Imported Landsat 8 Surface Reflectance (pre-Collection) - named [l8SR]
+// 1.2 Imported the SRTM Digital Elevation Data 30 m - named [srtm]
+// 1.3 Imported the Large Scale International Boundary Polygon table - named [countries]
+
+                    // ===========================
+                    // STEP 2 - CLOUD-FREE MOSAICS
+                    // ===========================
+
+// 2.1 AUXILIARY FUNCTIONS
+// This section cover the auxiliary functions that is later mapped into the Landsat image collections
+
+// 2.1.1 Landsat 8 Surface Reflectance
+
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery. 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352)
+  .and((scored.select(['pixel_qa']).neq(368)))
+  .and((scored.select(['pixel_qa']).neq(416)))
+  .and((scored.select(['pixel_qa']).neq(432)))
+  .and((scored.select(['pixel_qa']).neq(480)))
+  .and((scored.select(['pixel_qa']).neq(864)))
+  .and((scored.select(['pixel_qa']).neq(880)))
+  .and((scored.select(['pixel_qa']).neq(928)))
+  .and((scored.select(['pixel_qa']).neq(944)))
+  .and((scored.select(['pixel_qa']).neq(992))));
+};
+
+// This function will add the slope based on SRTM. Water bodies will show very low slope.
+var addSlope = function(img){
+  var slope = ee.Terrain.slope(srtm);
+  return img.addBands(slope);
+};
+
+// This function maps spectral indices for Mangrove Mapping using Landsat Imagery
+var addIndicesSR = function(img) {
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDMI (Normalized Difference Mangrove Index - Shi et al 2016 - New spectral metrics for mangrove forest identification)
+  var ndmi = img.normalizedDifference(['B7','B3']).rename('NDMI');
+  // MNDWI (Modified Normalized Difference Water Index - Hanqiu Xu, 2006)
+  var mndwi = img.normalizedDifference(['B3','B6']).rename('MNDWI');
+  // SR (Simple Ratio)
+  var sr = img.select('B5').divide(img.select('B4')).rename('SR');
+  // Band Ratio 54
+  var ratio54 = img.select('B6').divide(img.select('B5')).rename('R54');
+  // Band Ratio 35
+  var ratio35 = img.select('B4').divide(img.select('B6')).rename('R35');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+   return img
+    .addBands(ndvi)
+    .addBands(ndmi)
+    .addBands(mndwi)
+    .addBands(sr)
+    .addBands(ratio54)
+    .addBands(ratio35)
+    .addBands(gcvi);
+};
+
+// 2.2 MOSAIC PREPARATION
+// 2.2.1 Visualization parameter objects for mosaic displaying
+
+var visParSR = {bands:['B5','B4','B3'], min: 150, max: 3800}; // Real color composite for SR imagery
+
+// 2.2.2 Mosaic
+// 2.2.2.1 Filter Landsat collections by period of interest and map the quality bands into the collection.
+// Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
+// Additionally, this will avoid including some seasonal variation of the other months into the composite.
+
+var l8SRdry2013 = l8SR.filterDate('2013-12-01', '2014-03-01'); // Dry Season 2013
+var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
+var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
+var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
+var collectionSR = ee.ImageCollection(l8SRdry2013.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+    .map(maskCloudsSR)
+    .map(addIndicesSR)
+    .map(addSlope);
+
+// 2.2.2.2 Calculate StdDev and Mean for spectral indices for time period
+// A) NDVI
+var ndviSD_SR = collectionSR.select('NDVI').reduce(ee.Reducer.stdDev()).rename('NDVIStdDev');
+var ndviMEAN_SR = collectionSR.select('NDVI').reduce(ee.Reducer.mean()).rename('NDVIMean');
+// B) NDMI
+var ndmiSD_SR = collectionSR.select('NDMI').reduce(ee.Reducer.stdDev()).rename('NDMIStdDev');
+var ndmiMEAN_SR = collectionSR.select('NDMI').reduce(ee.Reducer.mean()).rename('NDMIMean');
+// C) MNDWI (Hanqiu Xu, 2006)
+var mndwiSD_SR = collectionSR.select('MNDWI').reduce(ee.Reducer.stdDev()).rename('MNDWIStdDev');
+var mndwiMEAN_SR = collectionSR.select('MNDWI').reduce(ee.Reducer.mean()).rename('MNDWIMean');
+// D) SR
+var srMEAN_SR = collectionSR.select('SR').reduce(ee.Reducer.mean()).rename('SRMean');
+// E) R54
+var r54MEAN_SR = collectionSR.select('R54').reduce(ee.Reducer.mean()).rename('R54Mean');
+// F) R35
+var r35MEAN_SR = collectionSR.select('R35').reduce(ee.Reducer.mean()).rename('R35Mean');
+// G GCVI (Gitelson et al. (2003))
+var gcviMEAN_SR = collectionSR.select('GCVI').reduce(ee.Reducer.mean()).rename('GCVIMean');
+
+// 2.2.2.3 Create Cloud-free Median Composite and add additional bands
+var waterMask = mndwiMEAN_SR.gt(-0.28)//.and(ndviMEAN_SR.lt(0.35)); // This mask will mask everything that is not water based on mNDWI.
+// Open water bodies will have positive values while non water classes will show large negative values
+// This will be helpful on the section 3.1 where samples of water bodies need to be collected
+
+var maskII = water.select(['max_extent']).eq(1);
+
+var medianCompositeSR = collectionSR.median().mask(waterMask).updateMask(maskII) // add our classification mask
+// add the StDV if needed following the same approach as below
+    .addBands(ndviMEAN_SR)
+    .addBands(ndmiMEAN_SR)
+    .addBands(mndwiMEAN_SR)
+    .addBands(srMEAN_SR)
+    .addBands(r54MEAN_SR)
+    .addBands(r35MEAN_SR)
+    .addBands(gcviMEAN_SR);
+    
+// 2.2.2.4 Clip the global Composites
+//var liberia = countries.clip('name' , 'equals', 'BOTSWANA');// Select Liberia from a International Boundary Lines Dataset (imported)
+var liberiaMedianSR = medianCompositeSR.clip(liberia); // Clip Liberia Polygon
+var globalwater = water.clip(liberia);
+
+                    // ===========================
+                    // STEP 3 - CLASSIFICATION
+                    // ===========================
+
+
+// 3.1 Sample Selection
+
+// Draw polygons by hand by clicking the point icon in the geometry drawing tools
+// a) Click '+new layer' to make sets of polygons, each set representing samples from a class.
+// b) For each set of polygons, in the Geometry Imports, click the gear icon and 'Import as' FeatureCollection. 
+// Also add a property called 'landcover' and set a consecutive integer starting from 0 for WATER and 1 for OTHERS
+
+// After sample selection, merge them together into a new variable
+var classes = Water.merge(Other);
+
+// 3.2 Classification
+// 3.2.1 Samples preparation
+
+// Select the bands for prediction
+var bands = ['B5','B6','B7', 'NDVI','MNDWI','R35','GCVI','slope'];
+
+// Make training data by 'overlaying' the points on the image
+var trainingTesting = liberiaMedianSR.select(bands).sampleRegions({
+  collection: classes,
+  properties: ['landcover'],
+  scale: 30
+}).randomColumn('random');
+
+// Partition the training
+// Here I randomly assign 60% for training
+var training = trainingTesting;
+
+// 3.2.2 CART
+var classifier = ee.Classifier.cart().train({
+  features: training.select(['B5','B6','B7', 'NDVI','MNDWI','R35','GCVI','slope', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with CART.
+var classifiedcart = liberiaMedianSR.select(bands).classify(classifier);
+// Display classified image
+Map.addLayer(classifiedcart, {min: 0, max: 1, palette: ['102e82', 'f9a824']}, 'CART',false);
+
+// 3.2.3 RANDOM FOREST
+var classifier = ee.Classifier.randomForest(100,8).train({
+  features: training.select(['B5','B6','B7', 'NDVI','MNDWI','R35','GCVI','slope', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with RandomForest.
+var classifiedrf = liberiaMedianSR.select(bands).classify(classifier);
+// Display classified image
+Map.addLayer(classifiedrf, {min: 0, max: 1, palette: ['0800a2', '42ff00']}, 'RF');
+
+
+                    // ============================
+                    // STEP 4 - VIZUALIZING RESULTS
+                    // ============================
+                    
+// 4.1 Visualization parameters
+Map.setCenter(-10.29625, 6.79332, 13); //  Map centered in Monrovia, Liberia
+var ndviViz = {min: -0.07514191418886185, max: 0.7801530361175537, palette: ['blue', 'white', 'green']};
+var ndwiViz = {min: -0.7140350937843323, max: 0.17053452134132385, palette: ['00FFFF', '0000FF']};
+var mndwiViz = {min: -0.5617302656173706, max: 0.42913779616355896, palette: ['f2e1ff', 'd450ff']};
+
+var ndvi = liberiaMedianSR.select('NDVIMean');
+var ndmi = liberiaMedianSR.select('NDMIMean');
+var mndwi = liberiaMedianSR.select('MNDWIMean');
+var slopes = liberiaMedianSR.select('slope');
+var waters = globalwater.select('max_extent');
+
+Map.addLayer(srtm, {}, 'SRTM',false);
+Map.addLayer(slopes, {}, 'SLOPE',false);
+Map.addLayer(ndvi, ndviViz, 'NDVI', false);
+Map.addLayer(ndmi, ndwiViz, 'NDMI', false);
+Map.addLayer(mndwi, ndwiViz, 'MNDWI');
+Map.addLayer(waters, {}, 'Global Water', false);
+Map.addLayer(mangroves,{}, 'Mangroves (Giri)', false);
+Map.addLayer(liberiaMedianSR, visParSR, 'Surface Reflectance');
+
+
+                    // ============================
+                    // STEP 5 - EXPORTING RESULTS
+                    // ============================
+// 5.1  Export the image to an Earth Engine asset to be used further
+// Select just Water from the Classification
+var justWater = classifiedrf.select(['classification']).eq(0);
+
+//Export the classification
+Export.image.toAsset({
+  image: justWater,
+  description: 'WaterClassificationWithRF',
+  assetId: 'RF_CLASS_Water',
+  scale: 30,
+  region: liberia,
+  maxPixels:1e10
+});
+
