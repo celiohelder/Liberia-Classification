@@ -88,11 +88,10 @@ var visParSR = {bands:['B7','B6','B4'], min: 450, max: 2800}; // Real color comp
 // Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
 // Additionally, this will avoid including some seasonal variatiation of the other months into the composite.
 
-var l8SRdry2013 = l8SR.filterDate('2013-12-01', '2014-03-01'); // Dry Season 2013
 var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
 var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
 var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
-var collectionSR = ee.ImageCollection(l8SRdry2013.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+var collectionSR = ee.ImageCollection(l8SRdry2014.merge(l8SRdry2015).merge(l8SRdry2016))
     .map(maskCloudsSR)
     .map(addIndicesSR)
     
