@@ -1,0 +1,295 @@
+            // ===================================================
+            //    Sparsely Vegetated Areas - CLASSIFICATION
+            // ===================================================
+            
+// Always remember to assign the value of 1 to the class of interest and 0 to other so we can mask the classification with itself and get rid of the OTHER classes
+// Based on the Spectral Indices chosen and band inspection performed in (4), 3 classes were highlighted: Coastal, BareAreas and GrassLands. This script is the final one to try to separate grassland from some areas of plantation.
+
+                    // ==========================
+                    // STEP 1 - LOAD THE DATASETS
+                    // ==========================
+ 
+// 1.1 Imported Landsat 8 Surface Reflectance (pre-Collection) - named [l8SR]
+// 1.2 Included 1 assets: Grassland (performed previously)
+
+                    // ===========================
+                    // STEP 2 - CLOUD-FREE MOSAICS
+                    // ===========================
+
+// 2.1 AUXILIARY FUNCTIONS
+// This section cover the auxiliary functions that is later mapped into the Landsat image collections
+
+// 2.1.1 Landsat 8 Surface Reflectance
+
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery. 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352)
+  .and((scored.select(['pixel_qa']).neq(368)))
+  .and((scored.select(['pixel_qa']).neq(416)))
+  .and((scored.select(['pixel_qa']).neq(432)))
+  .and((scored.select(['pixel_qa']).neq(480)))
+  .and((scored.select(['pixel_qa']).neq(864)))
+  .and((scored.select(['pixel_qa']).neq(880)))
+  .and((scored.select(['pixel_qa']).neq(928)))
+  .and((scored.select(['pixel_qa']).neq(944)))
+  .and((scored.select(['pixel_qa']).neq(992))));
+};
+
+// This function maps spectral indices for BuiltUp Areas Mapping using Landsat Imagery
+var addIndicesSR = function(img) {
+  // NDBI - Normalized Difference Built-up Index
+  var ndbi = img.normalizedDifference(['B6','B5']).rename('NDBI');
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // SR (Simple Ratio)
+  var sr = img.select('B5').divide(img.select('B4')).rename('SR');
+  // NDII - Normalized Difference Impervious Index
+  var ndii = img.normalizedDifference(['B3','B10']).rename('NDII');
+  // NDBaI - Normalized Difference Bareness Index
+  var ndbai = img.normalizedDifference(['B6','B10']).rename('NDBaI');
+  // BI - Baresoil Index
+  var bare = img.normalizedDifference(['B6','B7']).rename('BI');
+  // UI - Urban Index
+  var urbani = img.normalizedDifference(['B7','B5']).rename('UI');
+  // Band Ratio 64
+  var ratio64 = img.select('B7').divide(img.select('B5')).rename('R64');
+  // Band Ratio 65 (original)
+  var ratio65 = img.select('B6').divide(img.select('B5')).rename('R65');
+  // NDI (Green by Red)
+  var ratio34 = img.select('B3').divide(img.select('B4')).rename('R34')
+  //NDISI
+  var ndisi = img.expression('(TIR - ((VIS + NIR + SWIR)/3))/(TIR + ((VIS + NIR + SWIR)/3))',{
+    'VIS':img.select('B4'),
+    'NIR':img.select('B5'),
+    'SWIR':img.select('B3'),
+    'TIR':img.select('B10'),
+  }).rename('NDISI');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+  return img
+    .addBands(ndbi)
+    .addBands(ndvi)
+    .addBands(sr)
+    .addBands(ndii)
+    .addBands(ndbai)
+    .addBands(bare)
+    .addBands(urbani)
+    .addBands(ratio65)
+    .addBands(ratio64)
+    .addBands(ndisi)
+    .addBands(gcvi)
+    .addBands(ratio34);
+};
+
+// 2.2 MOSAIC PREPARATION
+// 2.2.1 Visualization parameter objects for mosaic displaying
+
+var visParSR = {bands:['B5','B4','B3'], min: 450, max: 2800}; // Real color composite for SR imagery
+
+// 2.2.2 Mosaic
+// 2.2.2.1 Filter Landsat collections by period of interest and map the quality bands into the collection.
+// Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
+// Additionally, this will avoid including some seasonal variatiation of the other months into the composite.
+
+var l8SRdry2013 = l8SR.filterDate('2013-12-01', '2014-03-01'); // Dry Season 2013
+var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
+var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
+var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
+var collectionSR = ee.ImageCollection(l8SRdry2013.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+    .map(maskCloudsSR)
+    .map(addIndicesSR);
+    
+
+// 2.2.2.2 Calculate Mean for spectral indices for time period. You can calculate Standard Deviation using the same approach but with the .reducerstdDev
+// A) NDVI
+var ndviMEAN = collectionSR.select('NDVI').reduce(ee.Reducer.mean()).rename('NDVIMean');
+// B) NDBI - Normalized Difference Built-up Index
+var ndbiMEAN = collectionSR.select('NDBI').reduce(ee.Reducer.mean()).rename('NDBIMean');
+// C) NDII - Normalized Difference Impervious Index
+var ndiiMEAN = collectionSR.select('NDBI').reduce(ee.Reducer.mean()).rename('NDIIMean');
+// D) NDBaI - Normalized Difference Bareness Index
+var ndbaiMEAN = collectionSR.select('NDBaI').reduce(ee.Reducer.mean()).rename('NDBaIMean');
+// E) BI - Baresoil Index
+var bareMEAN = collectionSR.select('BI').reduce(ee.Reducer.mean()).rename('BIMean');
+// F) UI - Urban Index
+var urbaniMEAN = collectionSR.select('UI').reduce(ee.Reducer.mean()).rename('UIMean');
+// G) Band Ratio 54
+var r65MEAN = collectionSR.select('R65').reduce(ee.Reducer.mean()).rename('R65Mean');
+// H) NDISI
+var ndisiMEAN = collectionSR.select('NDISI').reduce(ee.Reducer.mean()).rename('NDSISMean');
+// I) GCVI
+var gcviMEAN = collectionSR.select('GCVI').reduce(ee.Reducer.mean()).rename('GCVIMean');
+// J) SR
+var srMEAN = collectionSR.select('SR').reduce(ee.Reducer.mean()).rename('SRMean');
+
+// 2.2.2.3 Create Cloud-free Median Composite and add additional bands and masks
+var medianCompositeSR = collectionSR.median().clip(liberia);
+// --> Here you can add the bands above by using .addBands
+
+// A. Masking Phase
+
+// This masking phase is devoted to mask classes we already have.
+var mask = waterClass.select(['classification']).neq(1).clip(liberia); // Water
+var maskII = mangroveClass.select(['classification']).neq(1).clip(liberia); //Mangroves
+var maskIII = urbanIClass.select(['classification']).neq(1).clip(liberia); // Urban
+var maskIV = urbanIIClass.select(['classification']).neq(1).clip(liberia); // Urban (human Settlements)
+var maskV = coastClass.select(['classification']).neq(1).clip(liberia); // Ecosystem Complex (Sand and Tidal Areas)
+var maskVI = barrenClass.select(['classification']).neq(1).clip(liberia); // Bare areas
+var maskVII = grassClass.select(['classification']).neq(1).clip(liberia); // Grasslands
+var maskVIII = woodycropClass.select(['classification']).neq(1).clip(liberia); // WoodyCrop
+var maskIX = treeI.select(['classification']).neq(1).clip(liberia); // Tree Covered I - Dense/Intact
+var maskX = treeII.select(['classification']).neq(1).clip(liberia); // Tree Covered II - Open/Secondary
+
+// This second step will replace previously masked pixel with a fixed value of your choice. Then, unmasked pixels will be replaced by zero.
+// Essentially, creating a reverse mask we can use to mask these classes into the surface reflectance mosaic.
+var waterMask = mask.unmask(2);
+var mangMask = maskII.unmask(2);
+var urbanMask = maskIII.unmask(2);
+var urbanMaskII = maskIV.unmask(2);
+var coastMask = maskV.unmask(2);
+var bareMask = maskVI.unmask(2);
+var grassMask = maskVII.unmask(2);
+var woodycropMask = maskVIII.unmask(2);
+var treeIMask = maskIX.unmask(2);
+var treeIIMask = maskX.unmask(2);
+
+// B. Composite
+var medianCompositeSR = collectionSR.median();
+
+// 2.2.2.4 Clip the global composite by the Liberia area and add the masks
+var liberiaMedianSR = medianCompositeSR.clip(liberia)
+    .mask(waterMask)
+    .updateMask(mangMask)
+    .updateMask(urbanMask)
+    .updateMask(urbanMaskII)
+    .updateMask(coastMask)
+    .updateMask(bareMask)
+    .updateMask(grassMask)
+    .updateMask(woodycropMask)
+    .updateMask(treeIMask)
+    .updateMask(treeIIMask);
+
+var visParSRII = {bands:['B5','B6','B4'], min: 1200, max: 1800}; // Real color composite for SR imagery
+Map.setCenter(-11.0404, 6.7028, 11);
+Map.addLayer(liberiaMedianSR, visParSRII, 'CompositeI'); // This composite has all the classes masked out so far
+
+// ----------------------------- GLCF
+var glcf = GLCF.select('tree_canopy_cover').filterBounds(liberia);
+Map.addLayer(glcf, {palette: ["ffffff","a3ff99","026e23"], min:1, max:61}, 'GLCF');
+
+// ----------------------------- Hansen
+
+// Here I just added the Hansen dataset to help me visualize
+var hansencover = Hansen.select('treecover2000').clip(liberia); // select tree cover and clip by the boundaries of liberia
+var hansenloss = Hansen.select('loss').clip(liberia); // select loss from 2000-2016 and clip
+var hansenlossmasked = hansenloss.mask(hansenloss); // Here I just masked it with itself so I can only add to the map the areas off loss
+
+var hansencoverII = hansencover.mask(hansenlossmasked);
+
+// Try to separate Hasens 
+// Greater than 75%
+var cover75mask = Hansen.select('treecover2000').gte(75).clip(liberia);
+var cover75 = cover75mask.mask(cover75mask);
+
+// Between 50 and 75%
+var cover50mask = Hansen.select('treecover2000').gte(50).and(Hansen.select('treecover2000').lt(75)).clip(liberia);
+var cover50 = cover50mask.mask(cover50mask);
+
+// Between 25 and 50%
+var cover25mask = Hansen.select('treecover2000').gte(25).and(Hansen.select('treecover2000').lt(50)).clip(liberia);
+var cover25 = cover25mask.mask(cover25mask);
+
+// Lower than 25%
+var cover0mask = Hansen.select('treecover2000').lt(25).clip(liberia);
+var cover0 = cover0mask.mask(cover0mask);
+
+// Add the datasets to the map
+Map.addLayer (hansencover,VisParamCover, 'HansenCover');
+Map.addLayer(hansenlossmasked, {palette:['blue'], max:1}, 'HassenLoss',false);
+
+// Add the different classes of forest cover
+Map.addLayer(cover75, {palette:['4e6f3e']}, 'Cover > 75%')
+Map.addLayer(cover50, {palette:['7b9828']}, 'Cover 50-75%')
+Map.addLayer(cover25, {palette:['9fc140']}, 'Cover 25-50%')
+Map.addLayer(cover0, {palette:['d2f299']}, 'Cover < 25%')
+
+
+// C. Masking Phase 2
+// This masking phase is to eliminate everything that is potentially not areas of low biomass
+// ----------------------------------
+var bandMask = liberiaMedianSR.select('B5').lt(2650); // Original gt2800
+var liberiaSRMasked = liberiaMedianSR
+  //.updateMask(bandMask)
+Map.addLayer(liberiaSRMasked, {bands:['B7','B6','B4'], min: 450, max: 2800}, 'CompositeII'); // This composite has all the classes masked out so far + masking out areas of "low" biomass
+
+
+                    // =======================
+                    // STEP 3 - CLASSIFICATION
+                    // =======================
+
+
+// 3.1 Sample Selection
+
+// Draw polygons by hand by clicking the point icon in the geometry drawing tools
+// a) Click '+new layer' to make sets of polygons, each set representing samples from a class.
+// b) For each set of polygons, in the Geometry Imports, click the gear icon and 'Import as' FeatureCollection. 
+// Also add a property called 'landcover' and set a consecutive integer starting from 0 for WATER and 1 for OTHERS
+
+// After sample selection, merge them together into a new variable
+var classes = SparselyVegetated.merge(SecondaryForest);
+
+// 3.2 Classification
+// 3.2.1 Samples preparation
+
+// Select the bands for prediction
+var bands = ['B5','B6','B7', 'NDVI','UI','R65','NDBaI','GCVI'];
+
+// Make training data by 'overlaying' the points on the image
+var trainingTesting = liberiaMedianSR.select(bands).sampleRegions({
+  collection: classes,
+  properties: ['landcover'],
+  scale: 30
+});
+
+var training = trainingTesting
+// 3.2.2 CART
+var classifierDT = ee.Classifier.cart().train({
+  features: training.select(['B5','B6','B7', 'NDVI','UI','R65','NDBaI','GCVI', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with CART.
+var classifiedcart = liberiaMedianSR.select(bands).classify(classifierDT);
+
+
+// 3.2.3 RANDOM FOREST
+var classifierRF = ee.Classifier.randomForest(100,8).train({
+  features: training.select(['B5','B6','B7', 'NDVI','UI','R65','NDBaI','GCVI', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with RandomForest.
+var classifiedrf = liberiaMedianSR.select(bands).classify(classifierRF);
+// ----------------
+
+// Display classified image
+//Map.addLayer(classifiedcart, {min: 0, max: 1, palette: ['ff00bc', 'deff00']}, 'CART', false);
+// Display classified image
+Map.addLayer(classifiedrf, {min: 0, max: 1, palette: ['magenta', 'blue']}, 'RF');
+
+
+Export.image.toAsset({
+  image: classifiedrf,
+  description: 'OpenForestClassificationWithRF',
+  assetId: 'RF_CLASS_OpenTreeCover',
+  scale: 30,
+  region: liberia,
+  maxPixels:1e12
+});
