@@ -1,0 +1,225 @@
+            // ===================================================
+            //            URBAN HUMAN SETTLEMENTS - PHASE I
+            // ===================================================
+// Always remember to assign the value of 1 to the class of interest and 0 to other so we can mask the classification with itself and get rid of the OTHER classes
+
+                    // ==========================
+                    // STEP 1 - LOAD THE DATASETS
+                    // ==========================
+ 
+// 1.1 Imported Landsat 8 Surface Reflectance (pre-Collection) - named [l8SR]
+// 1.2 Included 2 assets: Population Density Image and Populated Settlements
+
+                    // ===========================
+                    // STEP 2 - CLOUD-FREE MOSAICS
+                    // ===========================
+
+// 2.1 AUXILIARY FUNCTIONS
+// This section cover the auxiliary functions that is later mapped into the Landsat image collections
+
+// 2.1.1 Landsat 8 Surface Reflectance
+
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery. 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352)
+  .and((scored.select(['pixel_qa']).neq(368)))
+  .and((scored.select(['pixel_qa']).neq(416)))
+  .and((scored.select(['pixel_qa']).neq(432)))
+  .and((scored.select(['pixel_qa']).neq(480)))
+  .and((scored.select(['pixel_qa']).neq(864)))
+  .and((scored.select(['pixel_qa']).neq(880)))
+  .and((scored.select(['pixel_qa']).neq(928)))
+  .and((scored.select(['pixel_qa']).neq(944)))
+  .and((scored.select(['pixel_qa']).neq(992))));
+};
+
+// This function maps spectral indices for BuiltUp Areas Mapping using Landsat Imagery
+var addIndicesSR = function(img) {
+  // NDBI - Normalized Difference Built-up Index
+  var ndbi = img.normalizedDifference(['B6','B5']).rename('NDBI');
+  // NDVI
+  var ndvi = img.normalizedDifference(['B5','B4']).rename('NDVI');
+  // NDII - Normalized Difference Impervious Index
+  var ndii = img.normalizedDifference(['B3','B10']).rename('NDII');
+  // NDBaI - Normalized Difference Bareness Index
+  var ndbai = img.normalizedDifference(['B6','B10']).rename('NDBaI');
+  // BI - Baresoil Index
+  var bare = img.normalizedDifference(['B6','B7']).rename('BI');
+  // UI - Urban Index
+  var urbani = img.normalizedDifference(['B7','B5']).rename('UI');
+  // Band Ratio 54
+  var ratio54 = img.select('B6').divide(img.select('B5')).rename('R54');
+  //NDISI
+  var ndisi = img.expression('(TIR - ((VIS + NIR + SWIR)/3))/(TIR + ((VIS + NIR + SWIR)/3))',{
+    'VIS':img.select('B4'),
+    'NIR':img.select('B6'),
+    'SWIR':img.select('B3'),
+    'TIR':img.select('B10'),
+  }).rename('NDISI');
+  // GCVI
+  var gcvi = img.expression('(NIR/GREEN)-1',{
+    'NIR':img.select('B5'),
+    'GREEN':img.select('B3')
+  }).rename('GCVI');
+   return img
+    .addBands(ndbi)
+    .addBands(ndvi)
+    .addBands(ndii)
+    .addBands(ndbai)
+    .addBands(bare)
+    .addBands(urbani)
+    .addBands(ratio54)
+    .addBands(ndisi)
+    .addBands(gcvi);
+};
+
+// 2.2 MOSAIC PREPARATION
+// 2.2.1 Visualization parameter objects for mosaic displaying
+
+var visParSR = {bands:['B5','B4','B3'], min: 450, max: 2800}; // Real color composite for SR imagery
+
+// 2.2.2 Mosaic
+// 2.2.2.1 Filter Landsat collections by period of interest and map the quality bands into the collection.
+// Based on my cloud cover inspection, most of cloud-free images fall into Liberia's Dry Season [ December - Feb]
+// Additionally, this will avoid including some seasonal variatiation of the other months into the composite.
+
+var l8SRdry2014 = l8SR.filterDate('2014-12-01', '2015-03-01'); // Dry Season 2014
+var l8SRdry2015 = l8SR.filterDate('2015-12-01', '2016-03-01'); // Dry Season 2015
+var l8SRdry2016 = l8SR.filterDate('2016-12-01', '2017-03-01'); // Dry Season 2016
+var collectionSR = ee.ImageCollection.merge(l8SRdry2014).merge(l8SRdry2015).merge(l8SRdry2016))
+    .map(maskCloudsSR)
+    .map(addIndicesSR);
+    
+
+// 2.2.2.2 Calculate Mean for spectral indices for time period. You can calculate Standard Deviation using the same approach but with the .reducerstdDev
+// A) NDVI
+var ndviMEAN = collectionSR.select('NDVI').reduce(ee.Reducer.mean()).rename('NDVIMean');
+// B) NDBI - Normalized Difference Built-up Index
+var ndbiMEAN = collectionSR.select('NDBI').reduce(ee.Reducer.mean()).rename('NDBIMean');
+// C) NDII - Normalized Difference Impervious Index
+var ndiiMEAN = collectionSR.select('NDBI').reduce(ee.Reducer.mean()).rename('NDIIMean');
+// D) NDBaI - Normalized Difference Bareness Index
+var ndbaiMEAN = collectionSR.select('NDBaI').reduce(ee.Reducer.mean()).rename('NDBaIMean');
+// E) BI - Baresoil Index
+var bareMEAN = collectionSR.select('BI').reduce(ee.Reducer.mean()).rename('BIMean');
+// F) UI - Urban Index
+var urbaniMEAN = collectionSR.select('UI').reduce(ee.Reducer.mean()).rename('UIMean');
+// G) Band Ratio 54
+var r54MEAN = collectionSR.select('R54').reduce(ee.Reducer.mean()).rename('R54Mean');
+// H) NDISI
+var ndisiMEAN = collectionSR.select('NDISI').reduce(ee.Reducer.mean()).rename('NDSISMean');
+// I) GCVI
+var gcviMEAN = collectionSR.select('GCVI').reduce(ee.Reducer.mean()).rename('GCVIMean');
+
+// 2.2.2.3 Create Cloud-free Median Composite and add additional bands and masks
+var medianCompositeSR = collectionSR.median().clip(liberia);
+// --> Here you can add the bands above by using .addBands
+
+// A. Masking Phase
+
+// This masking phase is devoted to mask classes we already have.
+var mask = waterClass.select(['classification']).neq(1);
+var maskII = mangroveClass.select(['classification']).neq(1);
+// This second step will replace previously masked pixel with a fixed value of your choice. Then, unmasked pixels will be replaced by zero.
+// Essentially, creating a reverse mask we can use to mask these classes into the surface reflectance mosaic.
+var waterMask = mask.unmask(2);
+var mangMask = maskII.unmask(2);
+
+// B. Composite
+var medianCompositeSR = collectionSR.median();
+
+// 2.2.2.4 Clip the global composite by the Liberia area
+var liberiaMedianSR = medianCompositeSR.clip(liberia);
+// Mask the Water and Mangrove Classes
+var liberiaSRmosaic = liberiaMedianSR.mask(waterMask).updateMask(mangMask);
+
+// C. Preparing the Composite for Urban Areas
+var liberiaCities = liberiaSRmosaic.clip(MajorCities); //Clip the composite using the Major Cities Polygons created previously
+
+                    // =======================
+                    // STEP 3 - CLASSIFICATION
+                    // =======================
+
+
+// 3.1 Sample Selection
+
+// Draw polygons by hand by clicking the point icon in the geometry drawing tools
+// a) Click '+new layer' to make sets of polygons, each set representing samples from a class.
+// b) For each set of polygons, in the Geometry Imports, click the gear icon and 'Import as' FeatureCollection. 
+// Also add a property called 'landcover' and set a consecutive integer starting from 0 for WATER and 1 for OTHERS
+
+// After sample selection, merge them together into a new variable
+var classes = Urban.merge(Other);
+
+// 3.2 Classification
+// 3.2.1 Samples preparation
+
+// Select the bands for prediction
+var bands = ['B5','B6','B7', 'NDVI','NDBI','NDII','NDBaI','BI', 'UI', 'R54','NDISI','GCVI'];
+
+// Make training data by 'overlaying' the points on the image
+var trainingTesting = liberiaSRmosaic.select(bands).sampleRegions({
+  collection: classes,
+  properties: ['landcover'],
+  scale: 30
+});
+
+var training = trainingTesting
+
+// 3.2.2 CART
+var classifierDT = ee.Classifier.cart().train({
+  features: training.select(['B5','B6','B7', 'NDVI','NDBI','NDII','NDBaI','BI', 'UI', 'R54','NDISI','GCVI', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with CART.
+var classifiedcart = liberiaCities.select(bands).classify(classifierDT);
+
+// 3.2.3 RANDOM FOREST
+var classifierRF = ee.Classifier.randomForest(100,12).train({
+  features: training.select(['B5','B6','B7', 'NDVI','NDBI','NDII','NDBaI','BI', 'UI', 'R54','NDISI','GCVI', 'landcover']), 
+  classProperty: 'landcover', 
+  inputProperties: bands
+});
+
+// Classify the image with RandomForest.
+var classifiedrf = liberiaCities.select(bands).classify(classifierRF);
+
+
+                    // ======================
+                    // STEP 4 - VISUALIZATION
+                    // ======================
+
+
+// ---------------------------------------------------------------------------------------
+var bare = liberiaMedianSR.select('BI').clip(liberia);
+Map.addLayer(bare, {palette:['fffeea','9a8e15','120d4d'], min:0, max:0.4},'BI',false);
+
+var urbaniz = liberiaMedianSR.select('UI').clip(liberia);
+Map.addLayer(urbaniz, {palette:['fffeea','9a8e15','120d4d'], min:-0.6, max:0.1}, 'UI');
+
+Map.addLayer (liberiaSRmosaic, {bands:['B5','B4','B3'], min: 150, max: 3800}, 'Masked');
+Map.addLayer (liberiaCities, {bands:['B5','B4','B3'], min: 150, max: 3800}, 'Cities');
+
+
+// Display classified image with CART
+Map.addLayer(classifiedcart, {min: 0, max: 1, palette: ['ff00bc', 'deff00']}, 'CART');
+// Display classified image with RF
+Map.addLayer(classifiedrf, {min: 0, max: 1, palette: ['purple', 'yellow']}, 'RF');
+
+
+Export.image.toAsset({
+  image: classifiedrf,
+  description: 'UrbanClassificationWithRF',
+  assetId: 'RF_CLASS_UrbanI',
+  scale: 30,
+  region: liberia,
+  maxPixels:1e10
+});
+
+//print(classifierRF, 'RF');
+
+
