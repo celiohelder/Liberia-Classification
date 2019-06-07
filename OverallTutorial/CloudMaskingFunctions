@@ -1,0 +1,80 @@
+//=====================================================================================================================
+//                                                NASA - CI PARTNERSHIP
+// Remote Sensing of Land Cover and Ecosystems: Country-level Ecosystem Extent and Change Mapping in Sub-Saharan Africa
+//                                                  
+//                                                    Celio Sousa
+//                                    NASA GSFC Biospheric Sciences Laboratory 618
+//=====================================================================================================================
+
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+//                            |   CLOUD-MASKING FUNCTIONS FOR LANDSAT 8 SR COLLECTION  |
+//                            ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+// Script Objective(s):
+// a) Demonstrate two ways of masking clouds and cloud shadows from Landsat 8 Surface Reflectance based on file metadata
+
+
+// These functions were created based on the documentation available for Landsat 8
+// Values for pixel bit values and pixel band values were found here: 
+// https://landsat.usgs.gov/landsat-surface-reflectance-quality-assessment
+// Both functions were designed to be mapped into Landsat 8 Surface Reflectance Products. They both produce the exact same
+// results (See Section 2 and 3)
+
+// 1. FUNCTIONS
+// Function 1
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery based on PixelQA band (bit) value
+
+function maskL8sr(image) {
+  // Bits 3 and 5 are cloud shadow and cloud, respectively.
+  var cloudShadowBitMask = ee.Number(2).pow(3).int();
+  var cloudsBitMask = ee.Number(2).pow(5).int();
+  // Get the pixel QA band.
+  var qa = image.select('pixel_qa');
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+      .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  // Return the masked image, scaled to [0, 1].
+  return image.updateMask(mask).divide(10000).copyProperties(image, ["system:time_start"]);
+}
+
+// Function 2
+// This function masks clouds and cloud shadows in Landsat 8 Surface Reflectance imagery based on PixelQA band (pixel) value
+// 
+var maskCloudsSR = function(image) {
+  var scored = ee.Image(image);
+  return image.updateMask(scored
+  .select(['pixel_qa']).neq(352) // Cloud
+  .and((scored.select(['pixel_qa']).neq(368))) // Cloud
+  .and((scored.select(['pixel_qa']).neq(416))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(432))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(480))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(864))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(880))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(928))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(944))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(992))) // CLoud
+  .and((scored.select(['pixel_qa']).neq(328))) // CLoud Shadow
+  .and((scored.select(['pixel_qa']).neq(392))) // CLoud Shadow
+  .and((scored.select(['pixel_qa']).neq(840))) // CLoud Shadow
+  .and((scored.select(['pixel_qa']).neq(904))) // CLoud Shadow
+  .and((scored.select(['pixel_qa']).neq(1350)))); // CLoud Shadow
+};
+
+// 2. TESTING PHASE
+// Function 1
+var l8_I = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') // Load the Landsat 8 Surface Reflectance Image Collection
+    .filterDate('2015-01-01', '2017-01-01') // Filter by date
+    .map(maskL8sr); // Map the first function into the collection
+
+// Function 2
+var l8_II = ee.ImageCollection('LANDSAT/LC08/C01/T1_SR') // Load the Landsat 8 Surface Reflectance Image Collection
+    .filterDate('2015-01-01', '2017-01-01') // Filter by date
+    .map(maskCloudsSR); // Map the second function into the collection
+
+// 2. DISPLAYING THE RESULTS 
+Map.setCenter(-9.8932, 6.4299, 10); // Map centered in Liberia
+var imageVisParamI = {bands:['B5','B4','B3'], min: 0, max: 0.8}
+var imageVisParamII = {bands:['B5','B4','B3'], min: 200, max: 7000}
+
+Map.addLayer(l8_I, imageVisParamI, 'Composite I');
+Map.addLayer(l8_II, imageVisParamII, 'Composite II');
